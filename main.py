@@ -1,4 +1,5 @@
 import cv2
+import platform
 import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
@@ -8,6 +9,9 @@ import os
 import urllib.request
 import math
 import random
+
+# --- OS 감지 (위로 끌어올림) ---
+os_name = platform.system()
 
 # 1. 모델 다운로드
 MODEL_PATH = 'face_landmarker.task'
@@ -19,58 +23,72 @@ if not os.path.exists(MODEL_PATH):
 # 2. Pygame 초기화 (라즈베리파이 7인치 세로 모드: 480x800)
 pygame.init()
 WIDTH, HEIGHT = 480, 800
-screen = pygame.display.set_mode((WIDTH, HEIGHT))
-pygame.display.set_caption("코행기 - 새 애니메이션 최적화")
+
+# 리눅스(라즈베리파이)일 때만 전체화면, 그 외(윈도우 등)는 창 모드 적용
+if os_name == "Linux":
+    screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.FULLSCREEN)
+else:
+    screen = pygame.display.set_mode((WIDTH, HEIGHT))
+    
+pygame.display.set_caption("코행기 - 리눅스 전용 전체화면")
 clock = pygame.time.Clock()
 
-# --- ✈️ 비행기 이미지 로드 ---
+# --- ✈️ 비행기 이미지 로드 및 크기 확대 ---
 try:
-    plane_img = pygame.image.load('images/plane_f.png').convert_alpha()
-    plane_img = pygame.transform.scale(plane_img, (100, 50))
+    plane_path = os.path.join("images", "plane_f.png")
+    plane_img = pygame.image.load(plane_path).convert_alpha()
+    plane_img = pygame.transform.scale(plane_img, (140, 70))
 except FileNotFoundError:
-    print("비행기 이미지 파일이 없습니다. 기본 색상으로 대체합니다.")
-    plane_img = pygame.Surface((100, 50), pygame.SRCALPHA)
+    print("경고: 비행기 이미지를 찾을 수 없습니다. 기본 색상으로 대체합니다.")
+    plane_img = pygame.Surface((140, 70), pygame.SRCALPHA)
     plane_img.fill((0, 255, 122))
 
-# --- 🦅 새 이미지 딕셔너리 로드 (1~4번 프레임 & 검은색 배경 제거) ---
+# --- 🦅 새 이미지 에셋 동적 로드 및 반전 처리 ---
 bird_types = ["duck", "falcon", "goose", "pigeon", "seagull", "snipe"]
-bird_animations = {}  # 일반 새 (1~4번 프레임)
-flock_animations = {} # 편대 비행 (오리, 거위의 7~8번 프레임)
+base_directions = ["up", "down", "side"]
+animations = {}
 
-print("새 이미지 에셋을 불러오고 배경을 투명화합니다...")
-for bird_type in bird_types:
-    frames = []
-    # 정면/위에서 본 모습인 1~4번 프레임만 불러옵니다.
-    for i in range(1, 5):
-        path = os.path.join("images", "birds", bird_type, f"{bird_type}_{i}.png")
-        try:
-            img = pygame.image.load(path).convert()
-            img.set_colorkey((0, 0, 0)) # 검은색 배경 투명 처리
-            img = pygame.transform.scale(img, (70, 70))
-            frames.append(img)
-        except FileNotFoundError:
-            tmp_img = pygame.Surface((70, 70), pygame.SRCALPHA)
-            pygame.draw.circle(tmp_img, (255, 100, 0), (35, 35), 35)
-            frames.append(tmp_img)
-    bird_animations[bird_type] = frames
-
-    # 오리와 거위는 7~8번을 편대(보스) 이미지로 추가로 불러옵니다.
-    if bird_type in ["duck", "goose"]:
-        flock_frames = []
-        for i in range(7, 9):
-            path = os.path.join("images", "birds", bird_type, f"{bird_type}_{i}.png")
+print("새 이미지 에셋을 불러오고 방향별로 세팅합니다...")
+for bt in bird_types:
+    animations[bt] = {}
+    for d in base_directions:
+        animations[bt][d] = {"single": [], "boss": []}
+        
+        # 1. 일반 새 (1~2번 애니메이션 프레임) 로드
+        for i in range(1, 3):
+            path = os.path.join("images", "birds", bt, f"{d}_{bt}_{i}.png")
             try:
                 img = pygame.image.load(path).convert()
-                img.set_colorkey((0, 0, 0)) # 검은색 배경 투명 처리
-                img = pygame.transform.scale(img, (160, 120)) # 편대는 더 크게
-                flock_frames.append(img)
+                img.set_colorkey((0, 0, 0)) # 검은색 배경 투명화
+                img = pygame.transform.scale(img, (70, 70))
+                animations[bt][d]["single"].append(img)
             except FileNotFoundError:
                 pass
-        if flock_frames:
-            flock_animations[bird_type] = flock_frames
+                
+        # 2. 보스 편대 비행 이미지 로드
+        boss_path = os.path.join("images", "birds", bt, f"{d}_boss_{bt}.png")
+        try:
+            boss_img = pygame.image.load(boss_path).convert()
+            boss_img.set_colorkey((0, 0, 0))
+            boss_img = pygame.transform.scale(boss_img, (160, 120))
+            animations[bt][d]["boss"].append(boss_img)
+        except FileNotFoundError:
+            pass
+
+    # 3. side(좌->우) 이미지를 좌우 반전하여 우->좌 이미지 생성
+    animations[bt]["left_to_right"] = animations[bt]["side"]
+    animations[bt]["right_to_left"] = {"single": [], "boss": []}
+    
+    for img in animations[bt]["side"]["single"]:
+        flipped = pygame.transform.flip(img, True, False) # 좌우 반전
+        animations[bt]["right_to_left"]["single"].append(flipped)
+        
+    for img in animations[bt]["side"]["boss"]:
+        flipped = pygame.transform.flip(img, True, False) # 좌우 반전
+        animations[bt]["right_to_left"]["boss"].append(flipped)
 # ---------------------------------------------
 
-# 3. MediaPipe 초기화
+# 3. OS별 웹캠 및 MediaPipe 초기화
 base_options = python.BaseOptions(model_asset_path=MODEL_PATH)
 options = vision.FaceLandmarkerOptions(
     base_options=base_options,
@@ -78,11 +96,21 @@ options = vision.FaceLandmarkerOptions(
     num_faces=1
 )
 detector = vision.FaceLandmarker.create_from_options(options)
-cap = cv2.VideoCapture(0)
+
+# 미리 감지해둔 os_name 변수를 활용
+if os_name == "Windows":
+    cap = cv2.VideoCapture(0)
+elif os_name == "Linux":
+    cap = cv2.VideoCapture(0, cv2.CAP_V4L2)
+else:
+    cap = cv2.VideoCapture(0)
+    
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
 # 4. 게임 상태 및 글로벌 변수
 game_state = "START"
-RUNWAY_WIDTH = 120
+RUNWAY_WIDTH = 180  # 활주로 너비 넓게 유지
 scroll_offset = 0
 scroll_speed = 8
 health = 100.0
@@ -93,23 +121,25 @@ bird_timer = 0
 bird_speed_add = 2  
 spawn_rate = 60     
 
+# 버튼 영역 설정
 btn_width, btn_height = 200, 60
 normal_button = pygame.Rect(WIDTH//2 - btn_width//2, HEIGHT//2 - 20, btn_width, btn_height)
 hard_button = pygame.Rect(WIDTH//2 - btn_width//2, HEIGHT//2 + 60, btn_width, btn_height)
 retry_button = pygame.Rect(WIDTH//2 - btn_width//2, HEIGHT//2 + 60, btn_width, btn_height)
+exit_button = pygame.Rect(WIDTH//2 - btn_width//2, HEIGHT//2 + 140, btn_width, btn_height)
 
 def set_difficulty(level):
     global scroll_speed, bird_speed_add, spawn_rate, RUNWAY_WIDTH
     if level == "NORMAL":
         scroll_speed = 8
         bird_speed_add = 2
-        spawn_rate = 60
-        RUNWAY_WIDTH = 120
+        spawn_rate = 50
+        RUNWAY_WIDTH = 180
     elif level == "HARD":
         scroll_speed = 12
         bird_speed_add = 5
-        spawn_rate = 40
-        RUNWAY_WIDTH = 100
+        spawn_rate = 30
+        RUNWAY_WIDTH = 140
 
 def reset_game():
     global health, distance, scroll_offset, birds, bird_timer
@@ -132,6 +162,9 @@ while running:
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
+        elif event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_ESCAPE:
+                running = False
         elif event.type == pygame.MOUSEBUTTONDOWN:
             mouse_pos = pygame.mouse.get_pos()
             if game_state == "START":
@@ -143,12 +176,21 @@ while running:
                     set_difficulty("HARD")
                     reset_game()
                     game_state = "PLAYING"
+                elif exit_button.collidepoint(mouse_pos):
+                    running = False 
             elif game_state == "END":
                 if retry_button.collidepoint(mouse_pos):
                     game_state = "START" 
+                elif exit_button.collidepoint(mouse_pos):
+                    running = False 
 
     ret, frame = cap.read()
     if not ret:
+        screen.fill((100, 0, 0)) 
+        error_text = font_medium.render("Camera Not Found!", True, (255, 255, 255))
+        screen.blit(error_text, (WIDTH//2 - error_text.get_width()//2, HEIGHT//2))
+        pygame.display.flip()
+        clock.tick(60)
         continue
 
     # --- 📷 웹캠 세로 모드 비율 크롭 ---
@@ -187,53 +229,72 @@ while running:
         if deviation > RUNWAY_WIDTH // 2:
             health -= 0.5
             
-        # 2. 난이도별 새 생성 로직
+        # 2. 방향별 새 생성 로직
         bird_timer += 1
         if bird_timer > spawn_rate:
             bird_timer = 0
-            if random.random() > 0.4: 
-                spawn_y = -100
-                spawn_x = get_path_x(spawn_y, scroll_offset) + random.randint(-40, 40)
+            if random.random() > 0.3: 
+                direction = random.choice(["down", "up", "left_to_right", "right_to_left"])
+                bt = random.choice(bird_types)
                 
-                # 20% 확률로 거대 편대(Flock), 80% 확률로 일반 새(Single)
-                if random.random() > 0.8 and flock_animations:
-                    chosen_type = random.choice(list(flock_animations.keys()))
-                    bird_style = "flock"
-                else:
-                    chosen_type = random.choice(list(bird_animations.keys()))
-                    bird_style = "single"
+                style = "single"
+                if random.random() > 0.8 and len(animations[bt][direction]["boss"]) > 0:
+                    style = "boss"
+                
+                if len(animations[bt][direction][style]) == 0:
+                    continue
+                
+                if direction == "down":
+                    spawn_x = get_path_x(-100, scroll_offset) + random.randint(-50, 50)
+                    spawn_y = -100
+                    vx, vy = 0, scroll_speed + bird_speed_add
+                elif direction == "up":
+                    spawn_x = get_path_x(HEIGHT + 100, scroll_offset) + random.randint(-50, 50)
+                    spawn_y = HEIGHT + 100
+                    vx, vy = 0, -(scroll_speed + bird_speed_add) 
+                elif direction == "left_to_right":
+                    spawn_x = -100
+                    spawn_y = random.randint(100, HEIGHT - 100)
+                    vx, vy = scroll_speed, scroll_speed // 2 
+                elif direction == "right_to_left":
+                    spawn_x = WIDTH + 100
+                    spawn_y = random.randint(100, HEIGHT - 100)
+                    vx, vy = -scroll_speed, scroll_speed // 2 
                 
                 birds.append({
                     "x": spawn_x, 
                     "y": spawn_y, 
-                    "type": chosen_type,
-                    "style": bird_style,
+                    "vx": vx,
+                    "vy": vy,
+                    "type": bt,
+                    "direction": direction,
+                    "style": style,
                     "frame_idx": 0,    
                     "anim_timer": 0    
                 })
 
         # 3. 새 이동 및 충돌 판정
         for bird in birds[:]:
-            bird["y"] += scroll_speed + bird_speed_add
+            bird["x"] += bird["vx"]
+            bird["y"] += bird["vy"]
             
-            # --- 애니메이션 업데이트 ---
             bird["anim_timer"] += 1
-            if bird["anim_timer"] >= 5:  # 프레임 전환 속도
-                bird["anim_timer"] = 0
-                anim_list = flock_animations[bird["type"]] if bird["style"] == "flock" else bird_animations[bird["type"]]
-                max_frames = len(anim_list)
-                bird["frame_idx"] = (bird["frame_idx"] + 1) % max_frames
+            anim_list = animations[bird["type"]][bird["direction"]][bird["style"]]
             
-            # 현재 프레임 이미지 가져오기
-            anim_list = flock_animations[bird["type"]] if bird["style"] == "flock" else bird_animations[bird["type"]]
+            if bird["anim_timer"] >= 6: 
+                bird["anim_timer"] = 0
+                bird["frame_idx"] = (bird["frame_idx"] + 1) % len(anim_list)
+            
+            if bird["y"] > HEIGHT + 200 or bird["y"] < -200 or bird["x"] > WIDTH + 200 or bird["x"] < -200:
+                birds.remove(bird)
+                continue
+            
             current_img = anim_list[bird["frame_idx"]]
-            bird_rect = current_img.get_rect(center=(bird["x"], int(bird["y"])))
+            bird_rect = current_img.get_rect(center=(int(bird["x"]), int(bird["y"])))
             
             if plane_rect.colliderect(bird_rect):
-                damage = 30 if bird["style"] == "flock" else 15
+                damage = 30 if bird["style"] == "boss" else 15
                 health -= damage
-                birds.remove(bird)
-            elif bird["y"] > HEIGHT + 100:
                 birds.remove(bird)
 
         if health <= 0:
@@ -243,7 +304,6 @@ while running:
     # --- 🎨 화면 그리기 ---
     screen.blit(bg_surface, (0, 0))
 
-    # 활주로
     path_points = []
     for y in range(0, HEIGHT + 1, 20):
         x = get_path_x(y, scroll_offset)
@@ -253,20 +313,18 @@ while running:
         pygame.draw.lines(screen, (200, 200, 200), False, path_points, RUNWAY_WIDTH)
         pygame.draw.lines(screen, (255, 200, 0), False, path_points, 4)
 
-    # 비행기 이탈 경고 이펙트
     target_x = get_path_x(nose_y, scroll_offset)
     if game_state == "PLAYING" and abs(nose_x - target_x) > RUNWAY_WIDTH // 2:
         pygame.draw.circle(screen, (255, 50, 50), (nose_x, nose_y), 50, 5)
     screen.blit(plane_img, plane_rect)
 
-    # 새 렌더링
     for bird in birds:
-        anim_list = flock_animations[bird["type"]] if bird["style"] == "flock" else bird_animations[bird["type"]]
+        anim_list = animations[bird["type"]][bird["direction"]][bird["style"]]
         current_img = anim_list[bird["frame_idx"]]
-        bird_rect = current_img.get_rect(center=(bird["x"], int(bird["y"])))
+        bird_rect = current_img.get_rect(center=(int(bird["x"]), int(bird["y"])))
         
         halo_radius = 45 if bird["style"] == "single" else 90
-        pygame.draw.circle(screen, (255, 220, 0), (bird["x"], int(bird["y"])), halo_radius, 4)
+        pygame.draw.circle(screen, (255, 220, 0), (int(bird["x"]), int(bird["y"])), halo_radius, 4)
         
         screen.blit(current_img, bird_rect)
 
@@ -286,6 +344,10 @@ while running:
         pygame.draw.rect(screen, (200, 50, 50), hard_button, border_radius=10)
         hard_text = font_medium.render("HARD", True, (255, 255, 255))
         screen.blit(hard_text, (hard_button.centerx - hard_text.get_width()//2, hard_button.centery - hard_text.get_height()//2))
+
+        pygame.draw.rect(screen, (200, 50, 200), exit_button, border_radius=10)
+        exit_text = font_medium.render("EXIT", True, (255, 255, 255))
+        screen.blit(exit_text, (exit_button.centerx - exit_text.get_width()//2, exit_button.centery - exit_text.get_height()//2))
 
     elif game_state == "PLAYING":
         pygame.draw.rect(screen, (50, 50, 50), (20, 20, 200, 20))
@@ -312,6 +374,10 @@ while running:
         pygame.draw.rect(screen, (255, 150, 0), retry_button, border_radius=10)
         retry_text = font_medium.render("MENU", True, (255, 255, 255))
         screen.blit(retry_text, (retry_button.centerx - retry_text.get_width()//2, retry_button.centery - retry_text.get_height()//2))
+
+        pygame.draw.rect(screen, (200, 50, 200), exit_button, border_radius=10)
+        exit_text = font_medium.render("EXIT", True, (255, 255, 255))
+        screen.blit(exit_text, (exit_button.centerx - exit_text.get_width()//2, exit_button.centery - exit_text.get_height()//2))
 
     pygame.display.flip()
     clock.tick(60)
